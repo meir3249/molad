@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+/*
+ * UI palette: warm ivory paper, deep navy ink, gold accent. Every
+ * component pulls its colors from these tokens rather than hardcoding
+ * hex values, so the whole theme can be re-tuned from here.
+ *
+ * Note: the מוֹלָד app icon is a separate, deliberately darker system
+ * (slate tile, lunar silver, biblical gold - see
+ * scripts/generate-icons.mjs), because an icon has to hold up against
+ * an unknown home-screen wallpaper rather than against this background.
+ *
+ * Contrast (WCAG AA) was checked for the pairs the UI actually uses:
+ *   navy  (#1e3a68) on cream (#faf7ef) -> 10.5:1
+ *   muted (#55668a) on cream           ->  5.4:1   (body text safe)
+ *   muted on cream-deep (#f4eee0)      ->  5.0:1
+ *   navy on gold (#d9a94a)             ->  5.3:1   (gold always carries
+ *                                                   navy text, never white)
+ *   white on navy                      -> 11.3:1
+ *   danger (#b4453a) on cream          ->  5.1:1
+ */
+@theme {
+  --font-sans: "SF Pro Text", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /*
+   * Hebrew serif stack for the מוֹלָד wordmark. The brand name is set as
+   * live text rather than baked into the icon artwork, so it keeps its
+   * nikud and picks up a genuine sacred-Hebrew letterform from whatever
+   * the device has: Frank Ruhl Libre (web/Android), Frank Ruehl CLM
+   * (Linux), FrankRuehl or David (Windows/Office), Noto Serif Hebrew as
+   * the broad fallback.
+   */
+  --font-serif: "Frank Ruhl Libre", "Frank Ruehl CLM", FrankRuehl, David, "Noto Serif Hebrew",
+    "Times New Roman", serif;
+
+  --color-cream: #faf7ef;
+  --color-cream-deep: #f4eee0;
+  --color-surface: #ffffff;
+
+  --color-line: #efe7d6;
+  --color-line-strong: #e0d3b8;
+
+  --color-navy: #1e3a68;
+  --color-navy-deep: #16294a;
+  --color-navy-soft: #2d4e86;
+  --color-muted: #55668a;
+
+  --color-gold: #d9a94a;
+  --color-gold-light: #efcb7a;
+  --color-gold-pale: #fbf1d9;
+
+  --color-danger: #b4453a;
+  --color-danger-pale: #fdeeec;
+}
+
+@layer base {
+  /*
+   * iOS Safari zooms the viewport whenever a focused form control renders
+   * below 16px. Pinning the floor here (in the base layer, so an explicit
+   * text-* utility can still override it where that's intentional - e.g.
+   * the oversized PIN field) keeps every input tap-safe on a phone.
+   */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-cream);
+  color: var(--color-navy);
+  color-scheme: light;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Hide scrollbar visually but keep it scrollable (mobile-first, no fluff) */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
