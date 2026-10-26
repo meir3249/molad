@@ -5,10 +5,40 @@ import { gematriya } from '@hebcal/hdate'
 // Until this is set to a real https://script.google.com/... URL, the app
 // transparently persists data to localStorage instead (see services/api.js)
 // so the app is fully usable on its own.
-export const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwYMAHVkXxhmZxiBU03AwuS3rlkjp5c6_NQMFCyymzB4r1wOwsqNqjI7Ua1JYAr2Ik/exec'
+export const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbyHpGF7BcuZRJYW38hE0zOzghhG25aiAwfMM3x9S7GblViRV_fr_PU6MADWN0OggoI-/exec'
 
 export const PIN_STORAGE_KEY = 'birthday_app_pin'
 export const PEOPLE_STORAGE_KEY = 'birthday_app_people'
+
+// Cached answer to "is this PIN the admin PIN?", per browser *session*.
+//
+// sessionStorage rather than localStorage on purpose: the PIN itself is
+// remembered across visits (localStorage, PIN_STORAGE_KEY) so the gate
+// isn't shown every time, but the role is re-verified against the
+// backend once per session - which is what makes "on every first load,
+// check whether the user is an admin" true in practice. Close the tab,
+// and the next load asks the server again instead of trusting a value
+// that could have gone stale (ADMIN_PIN changed on the Apps Script side,
+// say).
+//
+// This cache is a UI convenience and nothing more. It decides which
+// affordances are *rendered*; it does not decide what data the user can
+// see. Row-level privacy is enforced server-side in doGet, which filters
+// IsPrivate rows by the PIN it was given - so flipping this value in
+// devtools reveals no private records, it only un-hides an "add" button
+// whose POST the backend is still free to reject.
+export const ADMIN_STORAGE_KEY = 'birthday_app_is_admin'
+
+// How many future years an .ics file enumerates when the birthday can't
+// be expressed as a single yearly RRULE.
+//
+// That is always the case for a Hebrew birthday, which lands on a
+// different Gregorian date every year, and also for a 29 February one,
+// where a plain yearly rule would only fire in leap years instead of
+// following this app's own "observed on 28 February" convention. Both
+// get one explicit event per year (see utils/icsUtils.js); 25 keeps the
+// file a few kB while comfortably outliving the app.
+export const ICS_SERIES_YEARS = 25
 
 // Form field limits. Enforced in the UI (maxLength + validation) and
 // surfaced to the user as a live character counter on the notes field, so

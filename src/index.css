@@ -65,6 +65,19 @@
   select {
     font-size: 16px;
   }
+
+  /*
+   * WebKit draws its own clear "x" inside type="search", at ~14px and
+   * positioned for LTR, which both fails the 44px tap-target guideline
+   * and lands on the wrong side of an RTL field. SearchField.jsx draws a
+   * proper one instead, so the native control is removed rather than
+   * left to overlap it.
+   */
+  input[type="search"]::-webkit-search-cancel-button,
+  input[type="search"]::-webkit-search-decoration {
+    -webkit-appearance: none;
+    appearance: none;
+  }
 }
 
 html,

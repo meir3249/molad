@@ -211,6 +211,46 @@ export async function fetchBirthdays(pin) {
   return Array.isArray(body) ? body.map(normalizeIncoming) : []
 }
 
+/**
+ * Asks the backend whether the PIN in hand is the admin PIN.
+ *
+ * Uses doGet's dedicated `action=isAdmin` branch, which answers
+ * `{ isAdmin: boolean }` and skips reading the sheet entirely - so this
+ * is a cheap call, which is what lets it run on every first load of a
+ * session rather than being cached forever.
+ *
+ * Why ask the server at all, when the app already holds the PIN and
+ * could just compare it to a hardcoded "3249"? Because that would put
+ * the admin PIN in the shipped JavaScript bundle, where anyone can read
+ * it - and then the admin PIN would also unlock the private rows that
+ * doGet gates on it. Only the server knows which PIN is which.
+ *
+ * Fails closed: anything other than an explicit `true` - a malformed
+ * body, an older deployment that doesn't know the action and returns the
+ * row array instead - yields `false`, i.e. the read-only UI. An
+ * AuthError still propagates, since a rejected PIN has to re-prompt the
+ * gate rather than quietly degrade to read-only.
+ *
+ * In localStorage fallback mode (no real webhook configured) there is no
+ * server to ask and no shared sheet to protect, so the single local user
+ * is the admin - otherwise the standalone app would have no way to add
+ * anyone.
+ *
+ * @param {string} pin
+ * @returns {Promise<boolean>}
+ */
+export async function fetchIsAdmin(pin) {
+  if (!isWebhookConfigured()) return true
+
+  const res = await fetchWithTimeout(
+    `${WEBHOOK_URL}?pin=${encodeURIComponent(pin)}&action=isAdmin`,
+    { method: 'GET', redirect: 'follow' },
+  )
+
+  const body = await parseResponse(res)
+  return body?.isAdmin === true
+}
+
 // --- write verification -----------------------------------------------
 //
 // The multi-account echo bug

@@ -40,14 +40,15 @@ export default function Wordmark({
           width={markSize}
           height={markSize}
           style={{ width: markSize, height: markSize }}
-          /* The artwork is already drawn as a tile with its own rounded
-             corners, and its background is opaque white, so this trims
-             the flat corners that would otherwise show as a pale square
-             against the cream UI. 16% is the largest radius that still
-             removes background only: measured against icon-192, nothing
-             it clips deviates from the background by more than 4/255,
-             while the previous 22% cut into the tile's gold edges. */
-          className="shrink-0 rounded-[16%]"
+          /* The generated icon is a square, fully opaque navy plate with
+             the calendar tile drawn on it (see
+             scripts/generate-icons.mjs), so without rounding it would
+             show up as a hard navy square against the cream UI. 21%
+             matches the radius iOS and Android apply to a home-screen
+             icon, and sits just outside the tile's own ~18.6% corner
+             radius - so it removes the navy wedges without reaching the
+             tile's gold rim. */
+          className="shrink-0 rounded-[21%]"
         />
       )}
       {showName && <span className={`font-serif tracking-wide ${nameClassName}`}>{APP_NAME}</span>}

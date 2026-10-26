@@ -22,17 +22,35 @@
  * lines of risk for no quality gain - the platform decoder already does
  * that part correctly, and it only has to happen when the art changes.
  *
+ * The artwork's own background is plain white, and shipping that
+ * produced the one thing an icon cannot afford: four white corners.
+ * Unmasked (favicon, Android `any`) they read as a pale square stuck
+ * behind the tile; masked (iOS squircle) the clip lands on white and the
+ * icon looks like a screenshot of a sticker. So the pipeline re-mattes
+ * the art onto ICON_BACKGROUND - the palette's navy-deep - before it
+ * resizes anything, which both kills the white and gives the tile a
+ * deliberate dark plate to sit on. The night sky at the top of the
+ * illustration is already close to that navy, so the top corners read as
+ * continuous; the bottom corners become a navy mount under the paper's
+ * gold edge.
+ *
  * Node built-ins only, no image library:
  *
  *   decodePng    inflate + unfilter + expand to RGBA8. Bit depth 8 and
  *                16 across greyscale, RGB, palette and both alpha
  *                variants; rejects interlaced files with a clear message
  *                rather than producing garbage.
- *   detectBackground  the modal colour of the source's border ring, used
- *                as the pad colour, so letterboxing and insets are
- *                seamless against the artwork instead of guessed at.
- *   flatten      composites any alpha onto that background, giving an
- *                opaque full-resolution RGB buffer.
+ *   findBackgroundMask  flood fill inward from the border across
+ *                near-white pixels, marking the source's background.
+ *                Flood fill rather than a plain whiteness threshold
+ *                because the illustration contains white *content* -
+ *                the stars in the night sky, the highlights on the gold
+ *                rings - and a threshold would punch holes through all
+ *                of it. Only white reachable from the edge is
+ *                background.
+ *   rematte      replaces the masked pixels with the brand colour and
+ *                composites any alpha onto it, giving an opaque
+ *                full-resolution RGB buffer.
  *   resample     separable Lanczos-3 in linear light. Two reasons it
  *                isn't the box filter it replaced: averaging
  *                gamma-encoded samples darkens an image as it shrinks,
@@ -60,10 +78,36 @@ const ORIGINAL = join(root, 'assets', 'icon.jpeg')
 const PUBLIC_DIR = join(root, 'public')
 
 /**
- * Used only if the source border isn't a near-uniform colour. The app's
- * cream, so a fallback still sits with the UI's paper background.
+ * What the source's white background is replaced with, and what any
+ * inset padding is filled with - the palette's `--color-navy-deep`
+ * (#16294a, see src/index.css).
+ *
+ * Measured against the artwork rather than picked for looks: the
+ * illustration's night sky runs about (49,65,98) at the tile's top edge
+ * and (36,50,76) deeper in, so this sits just below the darkest sky
+ * tone. The tile's own corner radius is ~18.6% of its width, which means
+ * the only places this colour is ever visible are the four corner
+ * wedges, the strip above the tile where the binder rings stand up, and
+ * the deliberate inset on the apple-touch and maskable outputs.
+ *
+ * It is also the one navy in the palette dark enough to stay clearly
+ * "background" against the tile's own navy body, so the tile keeps a
+ * readable edge instead of dissolving into its frame.
  */
-const FALLBACK_BACKGROUND = [0xfa, 0xf7, 0xef]
+const ICON_BACKGROUND = [0x16, 0x29, 0x4a]
+
+/**
+ * How far from pure white a pixel may be and still count as background,
+ * per channel.
+ *
+ * 20 sits in a wide, empty gap: the actual background is 0-2 off white,
+ * the nearest *content* is the cream paper at ~42 off white, and the
+ * anti-aliased boundary between tile and background is only 2-4 pixels
+ * across at the source's 1074px - roughly a third of a pixel once
+ * downscaled to 192, so where exactly the threshold falls inside that
+ * boundary is not something any output can show.
+ */
+const WHITE_TOLERANCE = 20
 
 /**
  * `inset` is the fraction of the canvas left as background on each side.
@@ -239,87 +283,98 @@ function decodePng(buffer) {
   return { width, height, data }
 }
 
-// --- background + flattening ------------------------------------------
+// --- background removal + re-matting ----------------------------------
 
 /**
- * Modal colour of the outermost pixel ring, quantised to 4-unit buckets
- * so JPEG ringing in a flat background doesn't split the vote. Returns
- * FALLBACK_BACKGROUND unless that colour holds a clear majority of the
- * border - an artwork that runs off every edge has no background to
- * infer, and guessing one would show up as a seam.
+ * Marks every pixel belonging to the source's white background.
+ *
+ * An iterative 4-connected flood fill seeded from all four edges, so
+ * only white that is *reachable from outside* is marked. That
+ * distinction is the whole reason this isn't a one-line whiteness test:
+ * the illustration's stars are white pixels surrounded by navy sky, and
+ * the gold rings carry white specular highlights. A threshold alone
+ * would erase all of them; a flood fill cannot reach them, because the
+ * tile's dark edge blocks every path in.
+ *
+ * Explicitly iterative (an array used as a stack) rather than
+ * recursive: at 1074x1124 a recursive fill overflows the call stack.
+ *
+ * Also treats a transparent pixel as background, so an artwork delivered
+ * as a PNG with real alpha works the same way - the current master is
+ * fully opaque, having come from a JPEG, but that's a property of this
+ * file rather than of the pipeline.
+ *
+ * @returns {Uint8Array} one byte per pixel, 1 = background
  */
-function detectBackground({ width, height, data }) {
-  const votes = new Map()
-  let total = 0
+function findBackgroundMask({ width, height, data }) {
+  const mask = new Uint8Array(width * height)
+  const stack = []
 
-  const vote = (x, y) => {
-    const i = (y * width + x) * 4
-    const alpha = data[i + 3]
-    // Transparent border => the artwork is meant to sit on whatever is
-    // behind it, which tells us nothing about an opaque pad colour.
-    if (alpha < 250) return
-    const key =
-      (data[i] >> 2) * 4096 + (data[i + 1] >> 2) * 64 + (data[i + 2] >> 2)
-    votes.set(key, (votes.get(key) ?? 0) + 1)
-    total += 1
+  const isBackgroundCandidate = (i) => {
+    const s = i * 4
+    if (data[s + 3] < 250) return true
+    const whiteDistance = Math.max(255 - data[s], 255 - data[s + 1], 255 - data[s + 2])
+    return whiteDistance < WHITE_TOLERANCE
+  }
+
+  const push = (x, y) => {
+    const i = y * width + x
+    if (mask[i] || !isBackgroundCandidate(i)) return
+    mask[i] = 1
+    stack.push(i)
   }
 
   for (let x = 0; x < width; x += 1) {
-    vote(x, 0)
-    vote(x, height - 1)
+    push(x, 0)
+    push(x, height - 1)
   }
   for (let y = 0; y < height; y += 1) {
-    vote(0, y)
-    vote(width - 1, y)
+    push(0, y)
+    push(width - 1, y)
   }
 
-  let best = -1
-  let bestCount = 0
-  for (const [key, count] of votes) {
-    if (count > bestCount) {
-      best = key
-      bestCount = count
-    }
+  while (stack.length > 0) {
+    const i = stack.pop()
+    const x = i % width
+    const y = (i - x) / width
+    if (x > 0) push(x - 1, y)
+    if (x < width - 1) push(x + 1, y)
+    if (y > 0) push(x, y - 1)
+    if (y < height - 1) push(x, y + 1)
   }
 
-  if (best < 0 || bestCount / total < 0.5) return FALLBACK_BACKGROUND
-
-  // Average the true samples inside the winning bucket rather than
-  // returning the bucket's corner, so the pad colour is exact when the
-  // background is exact.
-  const sums = [0, 0, 0]
-  let n = 0
-  const inBucket = (i) =>
-    (data[i] >> 2) * 4096 + (data[i + 1] >> 2) * 64 + (data[i + 2] >> 2) === best
-
-  const collect = (x, y) => {
-    const i = (y * width + x) * 4
-    if (data[i + 3] < 250 || !inBucket(i)) return
-    sums[0] += data[i]
-    sums[1] += data[i + 1]
-    sums[2] += data[i + 2]
-    n += 1
-  }
-
-  for (let x = 0; x < width; x += 1) {
-    collect(x, 0)
-    collect(x, height - 1)
-  }
-  for (let y = 0; y < height; y += 1) {
-    collect(0, y)
-    collect(width - 1, y)
-  }
-
-  return sums.map((sum) => Math.round(sum / n))
+  let count = 0
+  for (const value of mask) count += value
+  return { mask, count }
 }
 
-/** Composites RGBA8 onto an opaque background, yielding RGB8. */
-function flatten({ width, height, data }, background) {
+/**
+ * Produces the opaque RGB8 buffer everything downstream works from:
+ * masked background pixels become `background` outright, and anything
+ * else is composited onto `background` according to its alpha.
+ *
+ * The 2-4px anti-aliased rim where the tile meets the old white is
+ * deliberately left alone. Those pixels are already blends of artwork
+ * and white, so on navy they're very slightly light - but at the
+ * source's 1074px that rim is under a third of a pixel by the time it
+ * reaches the 192px output, well below what the Lanczos kernel resolves.
+ * Trying to un-blend it would mean guessing an alpha per pixel and would
+ * cost more in artefacts than it removes.
+ */
+function rematte({ width, height, data }, mask, background) {
   const out = new Uint8Array(width * height * 3)
 
   for (let i = 0; i < width * height; i += 1) {
     const s = i * 4
     const d = i * 3
+
+    if (mask[i]) {
+      out[d] = background[0]
+      out[d + 1] = background[1]
+      out[d + 2] = background[2]
+      continue
+    }
+
     const alpha = data[s + 3] / 255
     for (let c = 0; c < 3; c += 1) {
       out[d + c] = Math.round(data[s + c] * alpha + background[c] * (1 - alpha))
@@ -640,13 +695,14 @@ function encodePng(pixels, size) {
 
 export {
   decodePng,
-  detectBackground,
-  flatten,
+  findBackgroundMask,
+  rematte,
   resample,
   containedSize,
   compose,
   sharpen,
   encodePng,
+  ICON_BACKGROUND,
   OUTPUTS,
 }
 
@@ -669,11 +725,35 @@ function main() {
   }
 
   const decoded = decodePng(readFileSync(SOURCE))
-  const background = detectBackground(decoded)
-  const rgb = flatten(decoded, background)
+  const background = ICON_BACKGROUND
+  const { mask, count } = findBackgroundMask(decoded)
+  const rgb = rematte(decoded, mask, background)
+
+  const pixels = decoded.width * decoded.height
   console.log(
-    `source: ${decoded.width}x${decoded.height}, background ${hex(background)}`,
+    `source: ${decoded.width}x${decoded.height}, ` +
+      `re-matted ${count} background px (${((100 * count) / pixels).toFixed(1)}%) ` +
+      `onto ${hex(background)}`,
   )
+
+  // A sanity check with teeth: the corner wedges plus the strip above
+  // the binder rings come to roughly 9% of this artwork. Near 0% means
+  // the fill found no way in (a source whose background isn't white, or
+  // a tile drawn flush to the edges); a large fraction means it leaked
+  // through the tile and is eating the illustration. Either way the
+  // output would be wrong in a way that's easy to miss in a terminal,
+  // so it stops here instead.
+  const fraction = count / pixels
+  if (fraction < 0.01 || fraction > 0.35) {
+    console.error(
+      `\nAborting: background fill covered ${(100 * fraction).toFixed(1)}% of the source, ` +
+        'which is outside the expected 1-35% range.\n' +
+        `Check that ${SOURCE} still has a white border around the icon tile, ` +
+        'or adjust WHITE_TOLERANCE.\n' +
+        'Existing icons in public/ were left untouched.',
+    )
+    process.exit(1)
+  }
 
   mkdirSync(PUBLIC_DIR, { recursive: true })
   for (const { name, size, inset, sharpen: amount } of OUTPUTS) {

@@ -1,10 +1,10 @@
 import { useMemo } from 'react'
 import { HDate, gematriya } from '@hebcal/hdate'
-import { hebrewMonthLabel } from '../utils/dateUtils'
+import { hebrewMonthLabel, hebrewYearLabel } from '../utils/dateUtils'
 import Wordmark from './Wordmark'
 
 /**
- * Sticky header, in two rows:
+ * Header, in two rows:
  *   - Brand row: the מוֹלָד wordmark (right) and the PIN-reset control
  *     (left), which sort themselves that way automatically in an RTL
  *     flex row.
@@ -16,6 +16,12 @@ import Wordmark from './Wordmark'
  *
  * The brand name is the h1 rather than the date - the date changes every
  * day and isn't the document's title.
+ *
+ * Stickiness, the background blur and the bottom border live on App's
+ * wrapper rather than here, because the view switcher and the search
+ * field have to stick along with this: three separately-sticky elements
+ * would need their offsets kept in sync by hand, while one sticky
+ * container just works at any height.
  */
 export default function Header({ onResetPin }) {
   const { hebrewLine, gregorianLine } = useMemo(() => {
@@ -52,10 +58,7 @@ export default function Header({ onResetPin }) {
   }
 
   return (
-    <header
-      dir="rtl"
-      className="sticky top-0 z-10 border-b border-line bg-cream/85 px-5 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2.5 backdrop-blur-xl"
-    >
+    <header dir="rtl" className="px-5 pt-[calc(env(safe-area-inset-top)+0.5rem)]">
       <div className="flex items-center justify-between gap-3">
         <h1>
           <Wordmark variant="name" nameClassName="text-lg font-semibold text-navy" />
@@ -108,16 +111,4 @@ function UnlockIcon({ className }) {
   )
 }
 
-/**
- * Renders a Hebrew year with its thousands digit spelled out (e.g. 5787
- * -> 'ה׳תשפ״ז'). @hebcal/hdate's own gematriya() deliberately *omits* a
- * thousands digit of 5, on the documented assumption that "the current
- * millennium" is understood from context - fine for a casual label, but
- * this header is meant to read like a traditional full date, so the
- * thousands digit is kept explicit.
- */
-function hebrewYearLabel(hebrewYear) {
-  const thousands = Math.floor(hebrewYear / 1000)
-  const remainder = hebrewYear % 1000
-  return `${gematriya(thousands)}${gematriya(remainder)}`
-}
+

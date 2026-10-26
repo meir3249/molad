@@ -18,6 +18,23 @@ const initialForm = {
   notes: '',
 }
 
+/**
+ * Seeds the form from a day tapped in the calendar grid.
+ *
+ * Only the day and month are filled in - "25/10" - leaving the caret
+ * free for the year. That isn't a shortcut, it's the only correct
+ * reading: the grid shows the current month or a later one, while this
+ * form (rightly) rejects a future birth date, so prefilling the tapped
+ * *year* would hand the user a value that fails validation. Day and
+ * month are the part a calendar tap actually knows.
+ */
+function formWithDate(date) {
+  if (!date) return initialForm
+  const day = String(date.getDate()).padStart(2, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return { ...initialForm, gregorianDate: formatGregorianInput(`${day}${month}`) }
+}
+
 // Order the form is validated and focused in, so a failed submit always
 // lands the user on the *first* thing that needs fixing.
 const FIELD_ORDER = ['name', 'gregorianDate', 'hebrew', 'notes']
@@ -38,9 +55,22 @@ const FIELD_ORDER = ['name', 'gregorianDate', 'hebrew', 'notes']
  * up with aria-invalid/aria-describedby. The save button stays enabled
  * even when the form is invalid - a disabled button tells the user
  * nothing about *why* it won't go through.
+ *
+ * `initialDate` arrives when the sheet was opened by tapping a day in
+ * the calendar view. App.jsx remounts this component on every open (via
+ * a changing `key`) rather than passing the date into an effect, so the
+ * seeded form is correct on the very first render and the user never
+ * sees the previous session's values flash past.
  */
-export default function AddPersonModal({ open, onClose, onSave, saving, saveError = '' }) {
-  const [form, setForm] = useState(initialForm)
+export default function AddPersonModal({
+  open,
+  onClose,
+  onSave,
+  saving,
+  saveError = '',
+  initialDate = null,
+}) {
+  const [form, setForm] = useState(() => formWithDate(initialDate))
   const [errors, setErrors] = useState({})
   const fieldRefs = useRef({})
 
@@ -149,7 +179,7 @@ export default function AddPersonModal({ open, onClose, onSave, saving, saveErro
   }
 
   function handleClose() {
-    setForm(initialForm)
+    setForm(formWithDate(initialDate))
     setErrors({})
     onClose()
   }
@@ -175,6 +205,17 @@ export default function AddPersonModal({ open, onClose, onSave, saving, saveErro
         <div className="shrink-0 px-5 pt-3">
           <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-line-strong" />
           <h2 className="mb-1 text-lg font-semibold text-navy">הוספת יום הולדת</h2>
+          {/* Confirms which day was tapped, so a mis-tap on a 44px grid
+              cell is caught here rather than after saving. */}
+          {initialDate && (
+            <p className="mb-1 text-sm text-muted">
+              ביום{' '}
+              <span className="font-semibold text-navy-soft">
+                {initialDate.toLocaleDateString('he-IL', { day: 'numeric', month: 'long' })}
+              </span>{' '}
+              · נותר להשלים את שנת הלידה
+            </p>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">

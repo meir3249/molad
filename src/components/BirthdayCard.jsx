@@ -1,4 +1,5 @@
 import DaysLeftBadge from './DaysLeftBadge'
+import AddToCalendarButtons from './AddToCalendarButtons'
 
 /**
  * A single person's card in the feed.
@@ -14,13 +15,17 @@ import DaysLeftBadge from './DaysLeftBadge'
  * warmer gold tint, far = plain paper), per spec/ui.md's
  * visual-hierarchy requirement.
  *
+ * `highlighted` is set when the card was arrived at by tapping a day in
+ * the calendar view, which scrolls the list here - a ring makes it
+ * obvious which card the tap landed on when the day holds several.
+ *
  * Everything shown here comes off the pre-computed `occurrence` object
  * from utils/dateUtils.js - the card does no date math of its own, so
  * the age shown is always the one that occurrence actually counted
  * (Hebrew years for the Hebrew row, Gregorian years for the Gregorian
  * one; they can differ by one).
  */
-export default function BirthdayCard({ person, occurrence }) {
+export default function BirthdayCard({ person, occurrence, highlighted = false }) {
   const { gregorian, hebrew, next, isUnset } = occurrence
 
   if (isUnset) {
@@ -39,13 +44,13 @@ export default function BirthdayCard({ person, occurrence }) {
   return (
     <li
       dir="rtl"
-      className={`rounded-2xl border px-4 py-3.5 transition-colors ${
+      className={`scroll-mt-44 rounded-2xl border px-4 py-3.5 transition-colors ${
         isSoon
           ? 'border-gold-light bg-gold-pale shadow-sm'
           : isFar
             ? 'border-line bg-surface/60'
             : 'border-line bg-surface shadow-sm'
-      }`}
+      } ${highlighted ? 'ring-2 ring-gold ring-offset-2 ring-offset-cream' : ''}`}
     >
       <div className="flex items-baseline justify-between gap-3">
         <p className={`min-w-0 truncate font-semibold ${isFar ? 'text-navy-soft' : 'text-navy'}`}>
@@ -65,6 +70,8 @@ export default function BirthdayCard({ person, occurrence }) {
       </div>
 
       {person.notes && <p className="mt-2 truncate text-xs text-muted">{person.notes}</p>}
+
+      <AddToCalendarButtons person={person} hasHebrew={hasBoth} />
     </li>
   )
 }

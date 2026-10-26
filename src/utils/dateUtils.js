@@ -11,7 +11,7 @@
 // birthday/anniversary postponement algorithm from Reingold & Dershowitz's
 // "Calendrical Calculations" (the same algorithm hebcal.com uses). We do not
 // hand-roll Hebrew leap-year arithmetic.
-import { HDate, birthdayOrAnniversary } from '@hebcal/hdate'
+import { HDate, birthdayOrAnniversary, gematriya } from '@hebcal/hdate'
 import { HEBREW_MONTHS, HEBREW_DAYS } from '../constants'
 
 /** Shown instead of a computed date whenever a record's date is missing or invalid. */
@@ -281,35 +281,80 @@ function formatHebrewLabel(day, month, isLeapYear) {
   return `${hebrewDayLabel(day)} ב${hebrewMonthLabel(month, isLeapYear)}`
 }
 
+/**
+ * Renders a Hebrew year with its thousands digit spelled out (e.g. 5787
+ * -> 'ה׳תשפ״ז').
+ *
+ * @hebcal/hdate's own gematriya() deliberately *omits* a thousands digit
+ * of 5, on the documented assumption that "the current millennium" is
+ * understood from context - fine for a casual label, but the places this
+ * is used (the header's date line, the calendar grid's month heading)
+ * are meant to read like a traditional full date, so the thousands digit
+ * is kept explicit.
+ */
+export function hebrewYearLabel(hebrewYear) {
+  const thousands = Math.floor(hebrewYear / 1000)
+  const remainder = hebrewYear % 1000
+  return `${gematriya(thousands)}${gematriya(remainder)}`
+}
+
 /** Short Gregorian label for the feed, e.g. "14 במאי". */
 function formatGregorianLabel(date) {
   return date.toLocaleDateString('he-IL', { day: 'numeric', month: 'long' })
 }
 
+// --- Hebrew anniversary origin ----------------------------------------
+//
+// @hebcal/hdate's birthdayOrAnniversary(hyear, origin) wants an origin
+// date, but the HebrewDate column stores only a day and a month - there
+// is no Hebrew birth year to hand it. What the algorithm actually reads
+// off the origin year is a single bit: whether it was a leap year, which
+// is what decides how "Adar" / "Adar I" / "Adar II" and a
+// 30th-of-Adar-I map onto the target year. (Confirmed against the
+// library's own getBirthdayHD: the origin contributes
+// `isLeapYear(origYear)` and nothing else - none of its month *lengths*
+// are consulted.) So any year of the right shape will do, and the shape
+// is already known from the month name alone, via HEBREW_MONTHS'
+// `leapOrigin` flag.
+//
+// Two fixed years supply the two shapes, and they are deliberately
+// ancient. birthdayOrAnniversary returns `undefined` for a target year
+// that *precedes* its origin, so the origin has to sit below every year
+// this app can ask about - and the calendar grid can be navigated into
+// the past, which is exactly where the earlier choice of 5783/5784 fell
+// over. 5000/5001 are around the 13th century CE: far below the 1930
+// floor the form enforces (MIN_BIRTH_YEAR, Hebrew ~5690), and below
+// anything a hand-edited sheet row could plausibly hold.
+const LEAP_ORIGIN_YEAR = 5000 // (1 + 5000*7) % 19 === 3  -> leap
+const COMMON_ORIGIN_YEAR = 5001 // (1 + 5001*7) % 19 === 10 -> common
+
 /**
- * Next Hebrew-calendar occurrence of (hebrewMonth, hebrewDay) on or after
+ * Builds the `{yy, mm, dd}` origin birthdayOrAnniversary expects for a
+ * parsed Hebrew date.
+ * @param {{ day: number, month: number, leapOrigin: boolean }} parsed
+ */
+function hebrewOrigin(parsed) {
+  return {
+    yy: parsed.leapOrigin ? LEAP_ORIGIN_YEAR : COMMON_ORIGIN_YEAR,
+    mm: parsed.month,
+    dd: parsed.day,
+  }
+}
+
+/**
+ * Next Hebrew-calendar occurrence of a parsed Hebrew date on or after
  * `today`, converted to a Gregorian Date.
  *
- * `leapOrigin` must be supplied explicitly by the caller, derived from
- * parsing the HebrewDate wire string - "אדר א׳" vs "אדר" vs "אדר ב׳" are
- * three distinct month names precisely so this never has to be inferred.
- *
- * `birthHebrewYear` comes from converting the (now mandatory) Gregorian
- * birth date, so Hebrew-dated people finally get an "age turning" too -
- * counted in elapsed *Hebrew* years, which is the right unit for a
- * Hebrew birthday.
+ * `birthHebrewYear` comes from converting the (mandatory) Gregorian
+ * birth date, so Hebrew-dated people get an "age turning" too - counted
+ * in elapsed *Hebrew* years, which is the right unit for a Hebrew
+ * birthday.
  *
  * @returns {{ date: Date, hebrewLabel: string, ageTurning: number|null }}
  */
-function nextHebrewOccurrence({ month, day, leapOrigin, birthHebrewYear }, today) {
+function nextHebrewOccurrence({ parsed, birthHebrewYear }, today) {
   const todayMidnight = startOfDay(today)
-  // A reference Hebrew year whose leap/non-leap "shape" matches the
-  // origin is needed by birthdayOrAnniversary's postponement rules; its
-  // specific value is otherwise irrelevant, so two fixed, known years are
-  // used instead of searching for one. (5783 is a common year, 5784 a
-  // leap year, per @hebcal/hdate's own documented examples.)
-  const refYear = leapOrigin ? 5784 : 5783
-  const origin = { yy: refYear, mm: month, dd: day }
+  const origin = hebrewOrigin(parsed)
   const currentHebrewYear = new HDate(today).getFullYear()
 
   let targetHebrewYear = currentHebrewYear
@@ -405,15 +450,7 @@ export function getNextOccurrence(person, today = new Date()) {
     // sunset technically belongs to the next Hebrew day. Not knowable
     // from a date-only field, so the common case is assumed.
     const birthHebrewYear = new HDate(birthDate).getFullYear()
-    const hebrewNext = nextHebrewOccurrence(
-      {
-        month: parsedHebrew.month,
-        day: parsedHebrew.day,
-        leapOrigin: parsedHebrew.leapOrigin,
-        birthHebrewYear,
-      },
-      today,
-    )
+    const hebrewNext = nextHebrewOccurrence({ parsed: parsedHebrew, birthHebrewYear }, today)
     hebrew = {
       calendar: 'hebrew',
       date: hebrewNext.date,
@@ -433,6 +470,187 @@ export function getNextOccurrence(person, today = new Date()) {
     dateLabel: next.label,
     isUnset: false,
   }
+}
+
+// --- calendar grid ----------------------------------------------------
+//
+// getNextOccurrence answers "when is this person's *next* birthday",
+// which is exactly what the feed needs and exactly what a calendar grid
+// cannot use: the grid has to fill in whichever month the user navigated
+// to, including months in the past and months years ahead, and it needs
+// *every* birthday landing in that month rather than one per person.
+//
+// getMonthOccurrences below is that second question, built from the same
+// primitives (makeGregorianDateSafe for Feb 29, birthdayOrAnniversary
+// for Hebrew postponements), so a date marked on the grid can never
+// disagree with the date shown on the card.
+
+/**
+ * Every birthday that falls inside one Gregorian month.
+ *
+ * Both calendars are resolved independently, so a person carrying a
+ * Hebrew date as well as a Gregorian one can legitimately appear twice
+ * in the same month - or in two different months - which is the truth
+ * the feed already shows on their card.
+ *
+ * Hebrew dates need the Hebrew years that *overlap* the month rather
+ * than a single one: a Gregorian month always straddles a Hebrew month
+ * boundary and, around Tishrei, a Hebrew year boundary too, so the one
+ * or two candidate years are derived from the month's first and last
+ * day and each is tested against the month's bounds.
+ *
+ * Occurrences earlier than the person's own birth are skipped - a
+ * calendar shouldn't mark a birthday in a year the person didn't exist
+ * yet - which is also what keeps @hebcal's anniversary math away from
+ * years before its origin.
+ *
+ * @param {object[]} people
+ * @param {number} year Gregorian year
+ * @param {number} month Gregorian month, 1-12
+ * @returns {Map<number, Array<{ person: object, calendar: 'gregorian'|'hebrew', date: Date, ageTurning: number|null, label: string }>>}
+ *   keyed by day of month (1-31), each list in stable `people` order
+ */
+export function getMonthOccurrences(people, year, month) {
+  const byDay = new Map()
+  const firstDay = new Date(year, month - 1, 1)
+  const lastDay = new Date(year, month - 1, daysInGregorianMonth(year, month))
+
+  const add = (entry) => {
+    const day = entry.date.getDate()
+    const existing = byDay.get(day)
+    if (existing) existing.push(entry)
+    else byDay.set(day, [entry])
+  }
+
+  for (const person of people ?? []) {
+    const birthDate = parseStoredGregorianDate(person?.gregorianDate)
+    if (!birthDate) continue
+
+    if (birthDate.getMonth() + 1 === month && year >= birthDate.getFullYear()) {
+      const date = makeGregorianDateSafe(year, month, birthDate.getDate())
+      add({
+        person,
+        calendar: 'gregorian',
+        date,
+        ageTurning: year - birthDate.getFullYear(),
+        label: formatGregorianLabel(date),
+      })
+    }
+
+    const parsedHebrew = parseHebrewDateString(person.hebrewDate)
+    if (!parsedHebrew) continue
+
+    const birthHebrewYear = new HDate(birthDate).getFullYear()
+    const origin = hebrewOrigin(parsedHebrew)
+
+    const fromYear = new HDate(firstDay).getFullYear()
+    const toYear = new HDate(lastDay).getFullYear()
+    for (let hebrewYear = fromYear; hebrewYear <= toYear; hebrewYear += 1) {
+      // Below the origin the library has nothing to return (undefined),
+      // and below the birth year there is nothing to mark.
+      if (hebrewYear < origin.yy || hebrewYear < birthHebrewYear) continue
+      const occurrence = birthdayOrAnniversary(hebrewYear, origin)
+      if (!occurrence) continue
+      const date = occurrence.greg()
+      if (date < firstDay || date > lastDay || date < birthDate) continue
+      add({
+        person,
+        calendar: 'hebrew',
+        date,
+        ageTurning: hebrewYear - birthHebrewYear,
+        label: formatHebrewLabel(
+          occurrence.getDate(),
+          occurrence.getMonth(),
+          occurrence.isLeapYear(),
+        ),
+      })
+    }
+  }
+
+  return byDay
+}
+
+/**
+ * The birthdays falling on one specific day. Thin wrapper over
+ * getMonthOccurrences so the grid and the list's day filter can never
+ * disagree about who belongs to a date.
+ * @param {object[]} people
+ * @param {Date} date
+ */
+export function getOccurrencesOn(people, date) {
+  const byDay = getMonthOccurrences(people, date.getFullYear(), date.getMonth() + 1)
+  return byDay.get(date.getDate()) ?? []
+}
+
+// --- occurrence series (for calendar export) --------------------------
+//
+// A calendar file needs a *run* of future dates, not just the next one.
+// Both functions below start at the next upcoming occurrence (so an
+// exported file never begins in the past) and walk forward year by year.
+
+/**
+ * The next `count` Gregorian anniversaries, following this app's Feb 29
+ * convention (observed on Feb 28 in common years - see
+ * makeGregorianDateSafe). Only needed for leaplings; an ordinary
+ * Gregorian birthday is a single yearly RRULE and doesn't require a
+ * series at all.
+ * @returns {Array<{ date: Date, ageTurning: number|null }>}
+ */
+export function getGregorianOccurrenceSeries(person, count, today = new Date()) {
+  const birthDate = parseStoredGregorianDate(person?.gregorianDate)
+  if (!birthDate) return []
+
+  const month = birthDate.getMonth() + 1
+  const day = birthDate.getDate()
+  const birthYear = birthDate.getFullYear()
+  const todayMidnight = startOfDay(today)
+
+  let year = today.getFullYear()
+  if (makeGregorianDateSafe(year, month, day) < todayMidnight) year += 1
+
+  return Array.from({ length: count }, (_, i) => ({
+    date: makeGregorianDateSafe(year + i, month, day),
+    ageTurning: year + i - birthYear,
+  }))
+}
+
+/**
+ * The next `count` Hebrew-calendar birthdays, each converted to the
+ * Gregorian day it falls on, with postponements applied per
+ * @hebcal/hdate. Returns an empty array for a person with no parseable
+ * Hebrew date.
+ * @returns {Array<{ date: Date, ageTurning: number|null, label: string }>}
+ */
+export function getHebrewOccurrenceSeries(person, count, today = new Date()) {
+  const parsed = parseHebrewDateString(person?.hebrewDate)
+  const birthDate = parseStoredGregorianDate(person?.gregorianDate)
+  if (!parsed || !birthDate) return []
+
+  const birthHebrewYear = new HDate(birthDate).getFullYear()
+  const origin = hebrewOrigin(parsed)
+  const todayMidnight = startOfDay(today)
+
+  let hebrewYear = new HDate(today).getFullYear()
+  if (birthdayOrAnniversary(hebrewYear, origin).greg() < todayMidnight) hebrewYear += 1
+
+  return Array.from({ length: count }, (_, i) => {
+    const occurrence = birthdayOrAnniversary(hebrewYear + i, origin)
+    return {
+      date: occurrence.greg(),
+      ageTurning: hebrewYear + i - birthHebrewYear,
+      label: formatHebrewLabel(
+        occurrence.getDate(),
+        occurrence.getMonth(),
+        occurrence.isLeapYear(),
+      ),
+    }
+  })
+}
+
+/** True when a person's birth date is 29 February (see makeGregorianDateSafe). */
+export function isLeapDayBirthday(person) {
+  const birthDate = parseStoredGregorianDate(person?.gregorianDate)
+  return Boolean(birthDate) && birthDate.getMonth() === 1 && birthDate.getDate() === 29
 }
 
 /**
