@@ -40,6 +40,36 @@ export const ADMIN_STORAGE_KEY = 'birthday_app_is_admin'
 // file a few kB while comfortably outliving the app.
 export const ICS_SERIES_YEARS = 25
 
+/**
+ * How a Hebrew birthday's run of dates is packaged into the .ics file.
+ *
+ *   false  ICS_SERIES_YEARS standalone VEVENTs, one per Hebrew year,
+ *          each with its own UID. Every importer on earth handles this,
+ *          and each event can carry that year's exact age. The cost is
+ *          that the calendar sees 25 unrelated entries, so there is no
+ *          "edit all occurrences" and no "delete all" - renaming the
+ *          reminder means renaming it 25 times.
+ *
+ *   true   ONE VEVENT whose recurrence set is an explicit RDATE list of
+ *          all the dates (RFC 5545 §3.8.5.2). The calendar treats it as
+ *          a genuine series, so editing the title or the alarm and
+ *          choosing "all events" updates every year at once, and
+ *          deleting it removes all of them - which is how the Gregorian
+ *          reminder already behaves. The cost is that a shared event
+ *          can't state a per-year age, and that RDATE is less
+ *          well-trodden than RRULE in real importers.
+ *
+ * Left `false` deliberately. The RDATE form is the better experience and
+ * is standards-correct, but "standards-correct" and "Google Calendar
+ * imports it the way we expect" are different claims, and only the
+ * second one matters here. Flip this to `true`, export the same person
+ * both ways, and import both into a real iPhone and a real Android
+ * before it becomes the default. What to check: that the Hebrew entry
+ * appears on *every* one of the 25 dates and not just the first, and
+ * that editing it offers to apply the change to the whole series.
+ */
+export const HEBREW_ICS_AS_SERIES = false
+
 // Form field limits. Enforced in the UI (maxLength + validation) and
 // surfaced to the user as a live character counter on the notes field, so
 // a value is never silently truncated on its way to the sheet.

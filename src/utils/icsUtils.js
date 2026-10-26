@@ -13,12 +13,20 @@
 //                observes it on Feb 28 in common years (see
 //                dateUtils.makeGregorianDateSafe). Rather than let the
 //                calendar entry contradict the card, leaplings get an
-//                enumerated series like the Hebrew case below.
-//   'hebrew'     ICS_SERIES_YEARS separate events, one per Hebrew year.
-//                A Hebrew birthday drifts against the Gregorian calendar
-//                every year, so there is no RRULE that describes it;
-//                each year's Gregorian date is computed through
-//                @hebcal/hdate and written out explicitly.
+//                enumerated run like the Hebrew case below.
+//   'hebrew'     ICS_SERIES_YEARS explicit dates. A Hebrew birthday
+//                drifts against the Gregorian calendar every year - the
+//                same Hebrew day can land three weeks apart in two
+//                consecutive years - so no RRULE describes it. Each
+//                year's Gregorian date is computed through
+//                @hebcal/hdate and written out.
+//
+//                How those dates are *packaged* is switchable, because
+//                the two options trade against each other and only a
+//                real device can settle it: as that many standalone
+//                events, or as one event carrying them all on an RDATE.
+//                See HEBREW_ICS_AS_SERIES in constants.js for the full
+//                trade-off and what to test before flipping it.
 //
 // All events are all-day (`VALUE=DATE`), which is both correct - a
 // birthday has no time of day - and what makes them render as a banner
@@ -30,7 +38,7 @@
 // event's midnight start, i.e. 09:00 on the morning of the birthday.
 // From there the OS owns the notification, which is the whole point of
 // exporting rather than notifying in-app.
-import { ICS_SERIES_YEARS } from '../constants'
+import { HEBREW_ICS_AS_SERIES, ICS_SERIES_YEARS } from '../constants'
 import {
   getGregorianOccurrenceSeries,
   getHebrewOccurrenceSeries,
@@ -160,21 +168,58 @@ export function icsSummary(person, calendar) {
   return calendar === 'hebrew' ? `${base} (עברי)` : base
 }
 
+// --- UIDs --------------------------------------------------------------
+//
+// A UID is what an importing calendar matches on to decide "I already
+// have this - update it" versus "this is new - add it". Getting it wrong
+// doesn't fail loudly; it silently duplicates, and the user only notices
+// months later when a birthday shows up twice.
+//
+// The rule follows the shape of the event, which is why these are two
+// separate functions rather than one with a flag:
+//
+//   recurringUid   For an event that repeats (an RRULE, or an RDATE
+//                  list). There is exactly one such event per person
+//                  per calendar, so the UID must carry *no date*. It
+//                  can't: the DTSTART of a re-export is next year's
+//                  occurrence, not this year's, so a date-bearing UID
+//                  would differ on every re-export and the calendar
+//                  would stack up a fresh recurring series each time.
+//   occurrenceUid  For one event out of an enumerated run. Here the
+//                  date is required - each year is its own event and
+//                  needs its own identity - and it is also stable,
+//                  because a given birth date always resolves to the
+//                  same calendar day in a given year. A re-export
+//                  therefore updates the years it has in common and
+//                  only appends the ones that are genuinely new.
+
+function recurringUid(person, calendar) {
+  return `${uidSeed(person)}-${calendar}@molad`
+}
+
+function occurrenceUid(person, calendar, date) {
+  return `${uidSeed(person)}-${calendar}-${toIcsDate(date)}@molad`
+}
+
 /**
  * One VEVENT, as an array of unfolded content lines.
  *
- * Note what is *not* here: an age. For the single recurring Gregorian
- * event an age would be frozen at this year's value and wrong from next
- * year on, so it is only ever written by the enumerated series below,
- * which knows the age of each individual occurrence.
+ * `uid` is passed in rather than derived here, because only the caller
+ * knows whether it is building a recurring event or one slice of an
+ * enumerated run - see the note above.
+ *
+ * Note what is *not* here: an age. On any recurring event an age would
+ * be frozen at this year's value and wrong from next year on, so it is
+ * only ever written by the enumerated paths, which know the age of each
+ * individual occurrence.
  */
-function buildEvent({ person, calendar, date, extraLines = [], descriptionLines, stamp }) {
+function buildEvent({ person, calendar, uid, date, extraLines = [], descriptionLines, stamp }) {
   const summary = icsSummary(person, calendar)
   const description = descriptionLines.filter(Boolean).join('\n')
 
   return [
     'BEGIN:VEVENT',
-    `UID:${uidSeed(person)}-${calendar}-${toIcsDate(date)}@molad`,
+    `UID:${uid}`,
     `DTSTAMP:${stamp}`,
     `DTSTART;VALUE=DATE:${toIcsDate(date)}`,
     `DTEND;VALUE=DATE:${toIcsDate(nextDay(date))}`,
@@ -221,6 +266,7 @@ export function buildBirthdayIcs(person, calendar, today = new Date()) {
           buildEvent({
             person,
             calendar,
+            uid: occurrenceUid(person, calendar, entry.date),
             date: entry.date,
             stamp,
             descriptionLines: [
@@ -236,6 +282,7 @@ export function buildBirthdayIcs(person, calendar, today = new Date()) {
         buildEvent({
           person,
           calendar,
+          uid: recurringUid(person, calendar),
           date: occurrence.gregorian.date,
           stamp,
           extraLines: ['RRULE:FREQ=YEARLY'],
@@ -250,20 +297,53 @@ export function buildBirthdayIcs(person, calendar, today = new Date()) {
     const series = getHebrewOccurrenceSeries(person, ICS_SERIES_YEARS, today)
     if (series.length === 0) return null
 
-    for (const entry of series) {
+    if (HEBREW_ICS_AS_SERIES) {
+      // One event, with every later date listed on an RDATE. DTSTART is
+      // implicitly the first instance of a recurrence set, so it is
+      // excluded from the list - repeating it there would hand strict
+      // importers a duplicate occurrence on day one.
+      const [first, ...rest] = series
+      const extraLines =
+        rest.length > 0
+          ? [`RDATE;VALUE=DATE:${rest.map((entry) => toIcsDate(entry.date)).join(',')}`]
+          : []
+
       events.push(
         buildEvent({
           person,
           calendar,
-          date: entry.date,
+          uid: recurringUid(person, calendar),
+          date: first.date,
           stamp,
+          extraLines,
+          // No age: one description is shared by all 25 occurrences, so
+          // any number here would be right once and wrong 24 times. The
+          // Hebrew date itself is safe - it is the same every year, which
+          // is the entire reason this file exists.
           descriptionLines: [
-            `${entry.label}${entry.ageTurning !== null ? ` · חוגג/ת ${entry.ageTurning}` : ''}`,
+            `יום הולדת עברי: ${first.label}`,
             birthDateLabel ? `תאריך הולדת לועזי: ${birthDateLabel}` : null,
             notes,
           ],
         }),
       )
+    } else {
+      for (const entry of series) {
+        events.push(
+          buildEvent({
+            person,
+            calendar,
+            uid: occurrenceUid(person, calendar, entry.date),
+            date: entry.date,
+            stamp,
+            descriptionLines: [
+              `${entry.label}${entry.ageTurning !== null ? ` · חוגג/ת ${entry.ageTurning}` : ''}`,
+              birthDateLabel ? `תאריך הולדת לועזי: ${birthDateLabel}` : null,
+              notes,
+            ],
+          }),
+        )
+      }
     }
   }
 
